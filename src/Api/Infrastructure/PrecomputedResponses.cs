@@ -4,16 +4,15 @@ using Api.Models;
 namespace Api.Infrastructure;
 
 /// <summary>
-/// Pre-serialized JSON responses for all possible fraud scores (K=5 → 6 values).
-/// Avoids any allocation on the hot path.
+/// Pre-serialized JSON responses for all possible fraud scores (K=5 → 6 values: 0,1,2,3,4,5 out of 5).
+/// Direct array lookup (no Dictionary hash) — O(1) with no branching after clamp.
 /// </summary>
 public static class PrecomputedResponses
 {
-    private static readonly Dictionary<int, byte[]> Cache = new();
+    private static readonly byte[][] Cache = new byte[6][];
 
     static PrecomputedResponses()
     {
-        // K=5 means fraud_score is always one of: 0/5, 1/5, 2/5, 3/5, 4/5, 5/5
         for (int fraudCount = 0; fraudCount <= 5; fraudCount++)
         {
             float score = fraudCount / 5f;
@@ -27,13 +26,12 @@ public static class PrecomputedResponses
     }
 
     /// <summary>
-    /// Returns the pre-serialized JSON bytes for the given fraud score.
+    /// Returns the pre-serialized JSON bytes for the given fraud score. Zero allocation.
     /// </summary>
     public static byte[] GetResponseBytes(float fraudScore)
     {
-        int fraudCount = (int)MathF.Round(fraudScore * 5f);
-        if (fraudCount < 0) fraudCount = 0;
-        if (fraudCount > 5) fraudCount = 5;
-        return Cache[fraudCount];
+        int idx = (int)MathF.Round(fraudScore * 5f);
+        if ((uint)idx > 5u) idx = idx < 0 ? 0 : 5;
+        return Cache[idx];
     }
 }

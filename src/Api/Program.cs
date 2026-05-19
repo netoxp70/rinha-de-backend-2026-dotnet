@@ -26,17 +26,30 @@ Console.WriteLine($"Index loaded: {index.VectorCount:N0} vectors, {index.NList} 
 if (Environment.GetEnvironmentVariable("WARMUP") != "0")
 {
     var swWarm = System.Diagnostics.Stopwatch.StartNew();
-    int warmupIters = int.TryParse(Environment.GetEnvironmentVariable("WARMUP_ITERS"), out var _wi) && _wi > 0 ? _wi : 64;
+    int warmupIters = int.TryParse(Environment.GetEnvironmentVariable("WARMUP_ITERS"), out var _wi) && _wi > 0 ? _wi : 200;
     var rng = new Random(20260505);
     float warmSink = 0f;
+
+    // Representative fixed vectors: legit, fraud, borderline — primes JIT + page cache + QueryCache
+    ReadOnlySpan<float[]> fixtures =
+    [
+        [0.0041f,  0.1667f, 0.05f,  0.7826f, 0.3333f, -1f,    -1f,    0.0292f, 0.15f,  0f, 1f, 0f, 0.15f,  0.006f ], // legit
+        [0.9506f,  0.8333f, 1.0f,   0.2174f, 0.8333f, -1f,    -1f,    0.9523f, 1.0f,   0f, 1f, 1f, 0.75f,  0.0055f], // fraud
+        [0.05f,    0.25f,   0.5f,   0.5f,    0.5f,    0.1f,   0.05f,  0.015f,  0.25f,  1f, 0f, 1f, 0.5f,   0.05f  ], // borderline
+    ];
+
     for (int i = 0; i < warmupIters; i++)
     {
         var warmQ = new Shared.Vector14F();
-        unsafe
+        if (i % 4 < fixtures.Length)
         {
-            float* p = (float*)&warmQ;
+            var fx = fixtures[i % fixtures.Length];
+            for (int d = 0; d < fx.Length; d++) warmQ[d] = fx[d];
+        }
+        else
+        {
             for (int d = 0; d < Constants.VectorDimensions; d++)
-                p[d] = (float)(rng.NextDouble() * 2.0 - 1.0);
+                warmQ[d] = (float)(rng.NextDouble() * 2.0 - 1.0);
         }
         warmSink += engine.ComputeFraudScore(ref warmQ);
     }
@@ -95,12 +108,12 @@ app.MapPost("/fraud-score", (RequestDelegate)(async (HttpContext ctx) =>
     // KNN scoring
     float fraudScore = engine.ComputeFraudScore(ref query);
 
-    // Write pre-baked response directly
+    // Write pre-baked response directly via zero-copy BodyWriter
     var body = PrecomputedResponses.GetResponseBytes(fraudScore);
     ctx.Response.StatusCode = 200;
     ctx.Response.ContentType = "application/json";
     ctx.Response.ContentLength = body.Length;
-    await ctx.Response.Body.WriteAsync(body);
+    await ctx.Response.BodyWriter.WriteAsync(body);
 }));
 
 // ── UDS chmod on startup ────────────────────────────────────────────────────

@@ -117,29 +117,39 @@ public sealed class IvfIndex : IDisposable
     /// <summary>
     /// Find the nprobe closest cells to the query vector.
     /// </summary>
-    public void FindClosestCells(ReadOnlySpan<float> query, Span<int> cellIndices, int nprobe)
+    public unsafe void FindClosestCells(ReadOnlySpan<float> query, Span<int> cellIndices, int nprobe)
     {
         Span<float> distances = stackalloc float[nprobe];
         distances.Fill(float.MaxValue);
         cellIndices.Fill(-1);
 
-        for (int c = 0; c < _nList; c++)
+        fixed (float* qp = query)
+        fixed (float* cp = _centroids)
         {
-            var centroid = GetCentroid(c);
-            float dist = SimdDistance.L2Squared(query, centroid);
-
-            // Insert into sorted top-nprobe
-            if (dist < distances[nprobe - 1])
+            int stride = Constants.PaddedDimensions;
+            for (int c = 0; c < _nList; c++)
             {
-                int insertPos = nprobe - 1;
-                while (insertPos > 0 && dist < distances[insertPos - 1])
+                float* centPtr = cp + (long)c * stride;
+
+                // Prefetch centroid 4 ahead to pipeline memory loads
+                if (Sse.IsSupported && c + 4 < _nList)
+                    Sse.Prefetch0(cp + (long)(c + 4) * stride);
+
+                float dist = SimdDistance.L2Squared(qp, centPtr);
+
+                // Insert into sorted top-nprobe
+                if (dist < distances[nprobe - 1])
                 {
-                    distances[insertPos] = distances[insertPos - 1];
-                    cellIndices[insertPos] = cellIndices[insertPos - 1];
-                    insertPos--;
+                    int insertPos = nprobe - 1;
+                    while (insertPos > 0 && dist < distances[insertPos - 1])
+                    {
+                        distances[insertPos] = distances[insertPos - 1];
+                        cellIndices[insertPos] = cellIndices[insertPos - 1];
+                        insertPos--;
+                    }
+                    distances[insertPos] = dist;
+                    cellIndices[insertPos] = c;
                 }
-                distances[insertPos] = dist;
-                cellIndices[insertPos] = c;
             }
         }
     }

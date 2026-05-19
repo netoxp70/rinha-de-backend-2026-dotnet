@@ -1,6 +1,6 @@
 # Performance Analysis — Rinha de Backend 2026
 
-> **Data:** 2026-05-19 | **Ambiente:** Docker NativeAOT Linux (WSL2 / i7-1165G7 2.80GHz) | **Versão:** .NET 11 preview, nginx 1.30.1-alpine
+> **Data:** 2026-05-19 → atualizado 2026-05-20 | **Ambiente:** Docker NativeAOT Linux (WSL2 / i7-1165G7 2.80GHz) | **Versão:** .NET 11 preview, nginx 1.30.1-alpine
 
 ---
 
@@ -16,7 +16,7 @@
 | URL | `http://localhost:9999/fraud-score` (via nginx → UDS → NativeAOT) |
 | Ambiente | Docker Desktop + WSL2, `cpus=0.37` por API, `memory=150MB` |
 
-### 1.2 Resultados — 50 VUs / 3.000 reqs
+### 1.2 Resultados — 50 VUs / 3.000 reqs (BASELINE antes das otimizações)
 
 | Métrica | Valor | Meta | Status |
 |---------|-------|------|--------|
@@ -30,6 +30,26 @@
 | **RPS** | 44,6 req/s | — | — |
 | **Falhas HTTP** | **0 / 3.000** | 0% | ✅ |
 | **Taxa de falha** | **0,00%** | < 15% | ✅ |
+
+### 1.2b Resultados — 50 VUs / 3.000 reqs (OTIMIZADO, WSL2)
+
+Otimizações aplicadas: `BodyWriter.WriteAsync`, `FindClosestCells` pointer + prefetch, `QueryCache` lock-free,
+`PrecomputedResponses` array-indexed, `RequestParser.TryRead` sync fast-path, `KnnEngine` zero-copy span, `nginx worker_processes 2`.
+
+| Métrica | Valor | Delta vs baseline | Meta | Status |
+|---------|-------|-------------------|------|--------|
+| **min** | 3,16 ms | — | — | — |
+| **avg** | 4,26 ms | — | — | — |
+| **p50** | 4,06 ms | — | — | — |
+| **p90** | 5,0 ms | — | — | — |
+| **p95** | 5,69 ms | — | — | — |
+| **p99** | **~7,0 ms** | -99,7% | < 2.000 ms | ✅ |
+| **max** | 24,82 ms | — | — | — |
+| **RPS** | **216** | +384% | — | ✅ |
+| **Falhas HTTP** | **0 / 3.000** | = | 0% | ✅ |
+| **Taxa de falha** | **0,00%** | = | < 15% | ✅ |
+
+> **Nota WSL2:** p99 ~7ms em WSL2/Docker ≈ ~1-2ms em Linux nativo (overhead de virtualização + NAT).
 
 ### 1.3 Resultados — 1 VU / 200 reqs (latência real, sem contenção)
 

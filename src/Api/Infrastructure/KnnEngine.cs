@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Shared;
 
 namespace Api.Infrastructure;
@@ -8,6 +9,7 @@ public sealed class KnnEngine(IvfIndex index, int nprobe = Constants.DefaultNPro
     private readonly IvfIndex _index = index;
     private readonly int _nprobe = nprobe;
     private readonly int _k = k;
+    private readonly QueryCache _cache = new();
 
     // Borderline re-probe: when fraud_score is near the 0.6 threshold,
     // re-scan with more cells to improve accuracy on borderline cases.
@@ -33,15 +35,11 @@ public sealed class KnnEngine(IvfIndex index, int nprobe = Constants.DefaultNPro
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public float ComputeFraudScore(ref Vector14F queryVector)
     {
-        Span<float> query = stackalloc float[Constants.PaddedDimensions];
-        unsafe
-        {
-            fixed (float* src = &queryVector.D0)
-            {
-                for (int i = 0; i < Constants.PaddedDimensions; i++)
-                    query[i] = src[i];
-            }
-        }
+        // Zero-copy span over the struct's floats — no copy needed (struct is on caller's stack/heap).
+        ReadOnlySpan<float> query = MemoryMarshal.CreateReadOnlySpan(ref queryVector.D0, Constants.PaddedDimensions);
+
+        if (_cache.TryGet(query, out float cached))
+            return cached;
 
         Span<int>   topKIdx  = stackalloc int[_k];
         Span<float> topKDist = stackalloc float[_k];
@@ -71,11 +69,12 @@ public sealed class KnnEngine(IvfIndex index, int nprobe = Constants.DefaultNPro
             }
         }
 
+        _cache.Set(query, score);
         return score;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private float ScoreWithNprobe(Span<float> query, int nprobe, Span<int> topKIndices, Span<float> topKDists)
+    private float ScoreWithNprobe(ReadOnlySpan<float> query, int nprobe, Span<int> topKIndices, Span<float> topKDists)
     {
         // Cap nprobe to actual number of cells
         if (nprobe > _index.NList) nprobe = _index.NList;

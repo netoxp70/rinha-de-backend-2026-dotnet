@@ -48,7 +48,9 @@ internal static class RequestParser
         ReadResult result;
         try
         {
-            result = await pipe.ReadAsync(ct);
+            // Fast path: body already in pipe buffer (keep-alive, buffered request) — no await needed.
+            if (!pipe.TryRead(out result))
+                result = await pipe.ReadAsync(ct);
         }
         catch
         {
