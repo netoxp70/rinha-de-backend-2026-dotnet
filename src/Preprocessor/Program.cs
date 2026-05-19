@@ -5,7 +5,7 @@ using Shared;
 
 const int ExpectedCount = 3_000_000;
 const int NList = Constants.DefaultNList;
-const int KMeansIterations = 30;
+const int KMeansIterations = 5;
 const int Seed = 42;
 
 if (args.Length < 2)
@@ -100,56 +100,18 @@ var centroids = new float[NList * Constants.PaddedDimensions];
 var assignments = new int[count];
 var rng = new Random(Seed);
 
-// k-means++ initialization
+// Random initialization — O(nlist) vs O(N×nlist²) for k-means++.
+// Sufficient quality when followed by k-means iterations.
 {
-    // Pick first centroid randomly
-    int first = rng.Next(count);
-    Array.Copy(vectors, first * Constants.PaddedDimensions, centroids, 0, Constants.PaddedDimensions);
-
-    var minDist = new float[count];
-    Array.Fill(minDist, float.MaxValue);
-
-    for (int c = 1; c < NList; c++)
+    var picked = new HashSet<int>(NList);
+    for (int c = 0; c < NList; c++)
     {
-        // Update min distances
-        double totalDist = 0;
-        int prevCentroidOffset = (c - 1) * Constants.PaddedDimensions;
-        for (int i = 0; i < count; i++)
-        {
-            int vOffset = i * Constants.PaddedDimensions;
-            float dist = 0;
-            for (int d = 0; d < Constants.VectorDimensions; d++)
-            {
-                float diff = vectors[vOffset + d] - centroids[prevCentroidOffset + d];
-                dist += diff * diff;
-            }
-            if (dist < minDist[i])
-                minDist[i] = dist;
-            totalDist += minDist[i];
-        }
-
-        // Weighted random selection
-        double target = rng.NextDouble() * totalDist;
-        double cumulative = 0;
-        int selected = count - 1;
-        for (int i = 0; i < count; i++)
-        {
-            cumulative += minDist[i];
-            if (cumulative >= target)
-            {
-                selected = i;
-                break;
-            }
-        }
-
-        Array.Copy(vectors, selected * Constants.PaddedDimensions, centroids, c * Constants.PaddedDimensions, Constants.PaddedDimensions);
-
-        if (c % 32 == 0)
-            Console.WriteLine($"  Initialized centroid {c}/{NList}");
+        int idx;
+        do { idx = rng.Next(count); } while (!picked.Add(idx));
+        Array.Copy(vectors, idx * Constants.PaddedDimensions, centroids, c * Constants.PaddedDimensions, Constants.PaddedDimensions);
     }
+    Console.WriteLine($"  Random init done in {sw.Elapsed.TotalSeconds:F1}s");
 }
-
-Console.WriteLine($"  k-means++ init done in {sw.Elapsed.TotalSeconds:F1}s");
 
 // k-means iterations
 for (int iter = 0; iter < KMeansIterations; iter++)

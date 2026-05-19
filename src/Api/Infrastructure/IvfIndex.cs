@@ -1,6 +1,7 @@
 using System.IO.MemoryMappedFiles;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 using Shared;
 
@@ -269,6 +270,44 @@ public sealed class IvfIndex : IDisposable
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static unsafe long L2SquaredQ8(sbyte* a, sbyte* b)
+    {
+        if (Sse2.IsSupported)
+            return L2SquaredQ8Sse2(a, b);
+        return L2SquaredQ8Scalar(a, b);
+    }
+
+    /// <summary>
+    /// SSE2: load 16 sbytes each, unpack to int16, diff, square via MultiplyAddAdjacent, sum.
+    /// Processes all 14 dims (+ 2 zero-padded) in ~4 SSE2 instructions — no scalar loop.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe long L2SquaredQ8Sse2(sbyte* a, sbyte* b)
+    {
+        var va   = Sse2.LoadVector128(a);
+        var vb   = Sse2.LoadVector128(b);
+        var zero = Vector128<sbyte>.Zero;
+
+        var vaLo = Sse2.UnpackLow(va, zero).AsInt16();
+        var vbLo = Sse2.UnpackLow(vb, zero).AsInt16();
+        var vaHi = Sse2.UnpackHigh(va, zero).AsInt16();
+        var vbHi = Sse2.UnpackHigh(vb, zero).AsInt16();
+
+        var diffLo = Sse2.Subtract(vaLo, vbLo);
+        var diffHi = Sse2.Subtract(vaHi, vbHi);
+
+        var sqLo = Sse2.MultiplyAddAdjacent(diffLo, diffLo);
+        var sqHi = Sse2.MultiplyAddAdjacent(diffHi, diffHi);
+
+        var sq8   = Sse2.Add(sqLo, sqHi);
+        var shuf  = Sse2.Shuffle(sq8, 0b_10_11_00_01);
+        var sum2  = Sse2.Add(sq8, shuf);
+        var shuf2 = Sse2.Shuffle(sum2, 0b_00_00_10_10);
+        var sum1  = Sse2.Add(sum2, shuf2);
+        return Vector128.GetElement(sum1, 0);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe long L2SquaredQ8Scalar(sbyte* a, sbyte* b)
     {
         long sum = 0;
         for (int i = 0; i < Constants.VectorDimensions; i++)

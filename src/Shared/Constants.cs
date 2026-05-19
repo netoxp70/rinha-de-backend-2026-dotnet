@@ -17,7 +17,7 @@ public static class Constants
     public const float MaxMerchantAvgAmount = 10000f;
 
     // IVF defaults
-    public const int DefaultNList = 256;
+    public const int DefaultNList = 1024;
     public const int DefaultNProbe = 1;
     public const int DefaultRerank = 24;
 

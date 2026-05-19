@@ -43,16 +43,31 @@ public sealed class KnnEngine(IvfIndex index, int nprobe = Constants.DefaultNPro
             }
         }
 
-        float score = ScoreWithNprobe(query, _nprobe);
+        Span<int>   topKIdx  = stackalloc int[_k];
+        Span<float> topKDist = stackalloc float[_k];
+        float score = ScoreWithNprobe(query, _nprobe, topKIdx, topKDist);
 
-        // Borderline re-probe: if score is 0.4 or 0.6 (2 or 3 frauds out of 5),
-        // the result straddles the decision boundary. Re-scan with more cells.
+        // Borderline re-probe: only when fraudCount is 2 or 3 (near threshold)
+        // AND the distance margin between closest fraud and closest legit is tight.
+        // This avoids the 16x cost on clear-cut cases.
         if (_borderlineEnabled && _borderlineNprobe > _nprobe)
         {
             int fraudCount = (int)MathF.Round(score * _k);
             if (fraudCount == 2 || fraudCount == 3)
             {
-                score = ScoreWithNprobe(query, _borderlineNprobe);
+                float minFraud = float.MaxValue, minLegit = float.MaxValue;
+                for (int i = 0; i < _k; i++)
+                {
+                    int idx = topKIdx[i];
+                    if (idx < 0) continue;
+                    float d = topKDist[i];
+                    if (_index.GetLabel(idx) == 1) { if (d < minFraud) minFraud = d; }
+                    else                           { if (d < minLegit) minLegit = d; }
+                }
+                float total = minFraud + minLegit;
+                float margin = total > 0f ? MathF.Abs(minFraud - minLegit) / total : 0f;
+                if (margin < 0.15f)
+                    score = ScoreWithNprobe(query, _borderlineNprobe, topKIdx, topKDist);
             }
         }
 
@@ -60,16 +75,13 @@ public sealed class KnnEngine(IvfIndex index, int nprobe = Constants.DefaultNPro
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private float ScoreWithNprobe(Span<float> query, int nprobe)
+    private float ScoreWithNprobe(Span<float> query, int nprobe, Span<int> topKIndices, Span<float> topKDists)
     {
         // Cap nprobe to actual number of cells
         if (nprobe > _index.NList) nprobe = _index.NList;
 
         Span<int> cellIndices = stackalloc int[nprobe];
         _index.FindClosestCells(query, cellIndices, nprobe);
-
-        Span<int> topKIndices = stackalloc int[_k];
-        Span<float> topKDists = stackalloc float[_k];
 
         if (_q8Enabled && _index.HasQ8)
         {
