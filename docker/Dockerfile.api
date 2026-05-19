@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1.7
+ARG DOTNET_VERSION=11.0
+
+############################
+# 1. Build .NET projects (AOT for API, regular for Preprocessor)
+############################
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION}-preview AS build
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends clang zlib1g-dev \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY global.json ./
+COPY NuGet.config ./
+COPY Rinha.slnx ./
+COPY src/Shared/Shared.csproj src/Shared/
+COPY src/Api/Api.csproj src/Api/
+COPY src/Preprocessor/Preprocessor.csproj src/Preprocessor/
+RUN dotnet restore src/Api/Api.csproj -r linux-x64 \
+ && dotnet restore src/Preprocessor/Preprocessor.csproj
+
+COPY src/ ./src/
+RUN dotnet publish src/Api/Api.csproj -c Release -o /publish/api -r linux-x64 --self-contained true
+RUN dotnet publish src/Preprocessor/Preprocessor.csproj -c Release -o /publish/preprocessor
+
+############################
+# 2. Preprocess dataset (k-means++ → binary files baked into image)
+############################
+FROM mcr.microsoft.com/dotnet/runtime:${DOTNET_VERSION}-preview AS dataprep
+WORKDIR /work
+COPY --from=build /publish/preprocessor /preprocessor
+COPY resources/references.json.gz /work/references.json.gz
+RUN dotnet /preprocessor/Preprocessor.dll \
+        /work/references.json.gz \
+        /work/data/
+
+############################
+# 3. Final runtime image — AOT binary + preprocessed data
+#    Both API replicas share the same overlayfs layer → kernel page cache is shared.
+############################
+FROM mcr.microsoft.com/dotnet/runtime-deps:${DOTNET_VERSION}-preview AS runtime
+WORKDIR /app
+
+ENV DOTNET_EnableDiagnostics=0 \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_NOLOGO=1 \
+    DOTNET_gcServer=0 \
+    DOTNET_GCConserveMemory=9 \
+    DATA_DIR=/data
+
+COPY --from=build /publish/api/ /app/
+COPY --from=dataprep /work/data/ /data/
+
+EXPOSE 9999
+ENTRYPOINT ["/app/Api"]

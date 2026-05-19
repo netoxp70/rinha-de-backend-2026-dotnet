@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="src\Shared\Shared.csproj" />
+  <Project Path="src\Preprocessor\Preprocessor.csproj" />
+  <Project Path="src\Api\Api.csproj" />
+  <Project Path="src\RecallValidator\RecallValidator.csproj" />
+</Solution>

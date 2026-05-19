@@ -1,0 +1,10 @@
+bin/
+obj/
+data/
+.git/
+.vs/
+*.md
+docs/
+regras/
+bench/
+tools/
