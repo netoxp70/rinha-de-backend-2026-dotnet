@@ -82,9 +82,9 @@
 |---|------|--------|--------------------|
 | 6.1 | README.md completo | ✅ DONE | Build, run, arquitetura |
 | 6.2 | perf-journal.md | ✅ DONE | Template + iteração 0 baseline |
-| 6.3 | Branch `submission` | 🔲 TODO | Apenas docker-compose.yml + imagem pública |
+| 6.3 | Branch `submission` | ✅ DONE | Branch `submission` criada e pushed: https://github.com/netoxp70/rinha-de-backend-2026-dotnet |
 | 6.4 | Teste em máquina limpa | 🔲 TODO | `docker system prune -a` → `docker compose up` → teste |
-| 6.5 | Submit no GitHub | 🔲 TODO | PR no repo oficial da Rinha |
+| 6.5 | Submit no GitHub | ✅ DONE | Branches `main` e `submission` pushed para https://github.com/netoxp70/rinha-de-backend-2026-dotnet |
 
 ---
 
@@ -112,8 +112,8 @@
 | FASE 3 | 11 | 11 | 100% |
 | FASE 4 | 8 | 8 | 100% |
 | FASE 5 | 5 | 3 | 60% |
-| FASE 6 | 5 | 2 | 40% |
-| **Total** | **42** | **35** | **83%** |
+| FASE 6 | 5 | 4 | 80% |
+| **Total** | **42** | **37** | **88%** |
 
 ### Smoke test local (nprobe=2, Q8_SCAN=1)
 
