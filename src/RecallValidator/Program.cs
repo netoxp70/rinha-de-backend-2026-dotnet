@@ -43,17 +43,11 @@ unsafe
     var centroids      = new float[centroidsBytes.Length / sizeof(float)];
     Buffer.BlockCopy(centroidsBytes, 0, centroids, 0, centroidsBytes.Length);
 
-    var offsetsBytes = File.ReadAllBytes(Path.Combine(dataDir, "ivf_cell_offsets.bin"));
+    // Fence-post offsets: cellOffsets[c]..cellOffsets[c+1] is cell c's range.
+    // Vectors/labels are already stored in IVF cell order — no orderedIndices needed.
+    var offsetsBytes = File.ReadAllBytes(Path.Combine(dataDir, "ivf_offsets.bin"));
     var cellOffsets  = new int[offsetsBytes.Length / sizeof(int)];
     Buffer.BlockCopy(offsetsBytes, 0, cellOffsets, 0, offsetsBytes.Length);
-
-    var lengthsBytes = File.ReadAllBytes(Path.Combine(dataDir, "ivf_cell_lengths.bin"));
-    var cellLengths  = new int[lengthsBytes.Length / sizeof(int)];
-    Buffer.BlockCopy(lengthsBytes, 0, cellLengths, 0, lengthsBytes.Length);
-
-    var indicesBytes    = File.ReadAllBytes(Path.Combine(dataDir, "ivf_ordered_indices.bin"));
-    var orderedIndices  = new int[indicesBytes.Length / sizeof(int)];
-    Buffer.BlockCopy(indicesBytes, 0, orderedIndices, 0, indicesBytes.Length);
 
     int nList = centroids.Length / Constants.PaddedDimensions;
     Console.WriteLine($"IVF: nlist={nList}, load time={sw.Elapsed.TotalSeconds:F1}s");
@@ -169,7 +163,7 @@ unsafe
         Span<int>   topKIdx  = topKIdxArr.AsSpan(0, K);
         Span<float> topKDist = topKDistArr.AsSpan(0, K);
 
-        ScanCells(qp, cellIdx, nprobe, topKIdx, topKDist, K, cellOffsets, cellLengths, orderedIndices, vectorsPtr, queryIdx);
+        ScanCells(qp, cellIdx, nprobe, topKIdx, topKDist, K, cellOffsets, vectorsPtr, queryIdx);
 
         float score = FraudScore(topKIdx, K, labelsBytes);
 
@@ -204,7 +198,7 @@ unsafe
                 }
             }
 
-            ScanCells(qp, bCellIdx, bnp, topKIdx, topKDist, K, cellOffsets, cellLengths, orderedIndices, vectorsPtr, queryIdx);
+            ScanCells(qp, bCellIdx, bnp, topKIdx, topKDist, K, cellOffsets, vectorsPtr, queryIdx);
         }
 
         totalTimeIvfNs += (long)((Stopwatch.GetTimestamp() - tStart) * 1_000_000_000.0 / Stopwatch.Frequency);
@@ -267,7 +261,7 @@ static unsafe void ScanCells(
     float* qp,
     Span<int> cellIdx, int nprobe,
     Span<int> topKIdx, Span<float> topKDist, int k,
-    int[] cellOffsets, int[] cellLengths, int[] orderedIndices,
+    int[] cellOffsets,
     float* vectorsPtr, int skipIdx)
 {
     topKDist.Fill(float.MaxValue);
@@ -277,12 +271,11 @@ static unsafe void ScanCells(
     {
         int cell = cellIdx[p];
         if (cell < 0) continue;
-        int offset = cellOffsets[cell];
-        int length = cellLengths[cell];
+        int start = cellOffsets[cell];
+        int end   = cellOffsets[cell + 1];
 
-        for (int i = 0; i < length; i++)
+        for (int vi = start; vi < end; vi++)
         {
-            int vi = orderedIndices[offset + i];
             if (vi == skipIdx) continue;
             float* rp   = vectorsPtr + (long)vi * Constants.PaddedDimensions;
             float  dist = L2Sq(qp, rp);

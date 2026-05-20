@@ -19,11 +19,16 @@ public sealed class KnnEngine(IvfIndex index, int nprobe = Constants.DefaultNPro
     private readonly bool _borderlineEnabled = Environment.GetEnvironmentVariable("IVF_BORDERLINE") != "0";
 
     // Q8 2-phase: how many Q8 candidates to gather before F32 rerank.
-    // Q8_OVERFETCH=20 means scan for top-20 Q8 candidates, rerank with F32 for top-5.
     private readonly int _q8OverFetch = int.TryParse(
             Environment.GetEnvironmentVariable("Q8_OVERFETCH"), out var qof) && qof > 0
             ? qof : 20;
     private readonly bool _q8Enabled = Environment.GetEnvironmentVariable("Q8_SCAN") != "0";
+
+    // Early-stop: after this % of probed cells, check for unanimous top-K and abort.
+    // 0 = disabled. Reference uses 25.
+    private readonly int _earlyStopPct = int.TryParse(
+            Environment.GetEnvironmentVariable("IVF_EARLY_STOP_PCT"), out var esp) && esp > 0
+            ? esp : 25;
 
     public bool IsReady => _index.VectorCount > 0;
 
@@ -88,10 +93,10 @@ public sealed class KnnEngine(IvfIndex index, int nprobe = Constants.DefaultNPro
             int overfetch = Math.Max(_k, _q8OverFetch);
             Span<sbyte> q8Query    = stackalloc sbyte[Constants.PaddedDimensions];
             Span<int>   q8Indices  = stackalloc int[overfetch];
-            Span<long>  q8Dists    = stackalloc long[overfetch];
+            Span<int>   q8Dists    = stackalloc int[overfetch];
 
-            _index.QuantizeQuery(query, q8Query);
-            _index.ScanCellsQ8(q8Query, cellIndices, nprobe, q8Indices, q8Dists, overfetch);
+            IvfIndex.QuantizeQuery(query, q8Query);
+            _index.ScanCellsQ8(q8Query, cellIndices, nprobe, q8Indices, q8Dists, overfetch, _earlyStopPct);
 
             // Phase 2: F32 rerank of Q8 candidates
             topKDists.Fill(float.MaxValue);

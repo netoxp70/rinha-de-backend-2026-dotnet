@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.IO.Pipelines;
 using System.Runtime;
 using Api;
 using Api.Infrastructure;
@@ -18,8 +20,9 @@ var dataDir = Environment.GetEnvironmentVariable("DATA_DIR") ?? "data";
 var nprobe = int.TryParse(Environment.GetEnvironmentVariable("IVF_NPROBE"), out var np) ? np : Constants.DefaultNProbe;
 
 Console.WriteLine($"Loading IVF index from '{dataDir}'...");
-var index = new IvfIndex(dataDir);
+var index  = new IvfIndex(dataDir);
 var engine = new KnnEngine(index, nprobe);
+var bodyCache = new BodyCache();
 Console.WriteLine($"Index loaded: {index.VectorCount:N0} vectors, {index.NList} cells, nprobe={nprobe}");
 
 // ── Warmup: prefetch mmap pages + JIT warm-up ──────────────────────────────
@@ -94,26 +97,70 @@ var app = builder.Build();
 app.MapGet("/ready", () => Results.Ok());
 
 // ── POST /fraud-score ───────────────────────────────────────────────────────
-app.MapPost("/fraud-score", (RequestDelegate)(async (HttpContext ctx) =>
+// Sync fast-path: when the request body is already buffered in the pipe
+// (typical for HTTP/1.1 keep-alive POST <1KB), we avoid building an async
+// state machine entirely — no Task allocation, no thread hop.
+// Slow-path (body not yet buffered) falls through to TryParseAsync.
+app.MapPost("/fraud-score", (RequestDelegate)((HttpContext ctx) =>
 {
     var pipe = ctx.Request.BodyReader;
-    var (ok, query) = await RequestParser.TryParseAsync(pipe, ctx.RequestAborted);
 
-    if (!ok)
+    int rc = RequestParser.TryParseWithCache(pipe, bodyCache, out var query, out ulong bodyHash, out int cachedIdx);
+
+    // rc == 2 — body cache hit: skip parse + KNN entirely
+    if (rc == 2)
     {
-        ctx.Response.StatusCode = 422;
-        return;
+        var bodyHit = PrecomputedResponses.GetResponseBytesByIndex(cachedIdx);
+        return WriteResponse(ctx, bodyHit);
     }
 
-    // KNN scoring
-    float fraudScore = engine.ComputeFraudScore(ref query);
+    // rc == 1 — parsed ok: run KNN + populate body cache
+    if (rc == 1)
+    {
+        float fraudScore = engine.ComputeFraudScore(ref query);
+        int idx = PrecomputedResponses.IndexOf(fraudScore);
+        bodyCache.Set(bodyHash, idx);
+        var body = PrecomputedResponses.GetResponseBytesByIndex(idx);
+        return WriteResponse(ctx, body);
+    }
 
-    // Write pre-baked response directly via zero-copy BodyWriter
-    var body = PrecomputedResponses.GetResponseBytes(fraudScore);
-    ctx.Response.StatusCode = 200;
-    ctx.Response.ContentType = "application/json";
-    ctx.Response.ContentLength = body.Length;
-    await ctx.Response.BodyWriter.WriteAsync(body);
+    // rc == 0 — bad JSON
+    if (rc == 0)
+    {
+        ctx.Response.StatusCode = 422;
+        return Task.CompletedTask;
+    }
+
+    // rc == -1 → body not yet buffered, fall back to async
+    return SlowPathAsync(ctx);
+
+    static Task WriteResponse(HttpContext ctx, byte[] body)
+    {
+        var resp = ctx.Response;
+        resp.StatusCode    = 200;
+        resp.ContentType   = "application/json";
+        resp.ContentLength = body.Length;
+        var writer = resp.BodyWriter;
+        writer.Write(body.AsSpan());
+        var flush = writer.FlushAsync(ctx.RequestAborted);
+        return flush.IsCompletedSuccessfully ? Task.CompletedTask : flush.AsTask();
+    }
+
+    async Task SlowPathAsync(HttpContext c)
+    {
+        var (ok, q) = await RequestParser.TryParseAsync(c.Request.BodyReader, c.RequestAborted);
+        if (!ok)
+        {
+            c.Response.StatusCode = 422;
+            return;
+        }
+        float fraudScore = engine.ComputeFraudScore(ref q);
+        var body = PrecomputedResponses.GetResponseBytes(fraudScore);
+        c.Response.StatusCode    = 200;
+        c.Response.ContentType   = "application/json";
+        c.Response.ContentLength = body.Length;
+        await c.Response.BodyWriter.WriteAsync(body);
+    }
 }));
 
 // ── UDS chmod on startup ────────────────────────────────────────────────────

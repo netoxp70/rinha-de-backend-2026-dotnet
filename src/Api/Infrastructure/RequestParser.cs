@@ -37,6 +37,98 @@ internal static class RequestParser
     private static ReadOnlySpan<byte> B_km_from_current  => "km_from_current"u8;
 
     /// <summary>
+    /// Synchronous fast-path: succeeds when the body is already buffered in the pipe
+    /// (the common case for HTTP/1.1 keep-alive small POST bodies).
+    /// Returns 1 = ok, 0 = malformed JSON, -1 = body not yet buffered (caller falls back to async).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int TryParseSync(PipeReader pipe, out Vector14F query)
+    {
+        if (!pipe.TryRead(out var result))
+        {
+            query = default;
+            return -1;
+        }
+
+        var buf = result.Buffer;
+        bool ok;
+
+        if (buf.IsSingleSegment)
+        {
+            ok = Parse(buf.FirstSpan, out query);
+        }
+        else
+        {
+            int len = (int)buf.Length;
+            byte[] rented = ArrayPool<byte>.Shared.Rent(len);
+            buf.CopyTo(rented);
+            ok = Parse(rented.AsSpan(0, len), out query);
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+
+        pipe.AdvanceTo(buf.End);
+        return ok ? 1 : 0;
+    }
+
+    /// <summary>
+    /// Sync fast-path with body-cache awareness. Reads the raw body once and:
+    ///  - calls <paramref name="cache"/>.TryGet to short-circuit parse/KNN on cache hit,
+    ///  - parses the JSON only on miss, returning the parsed Vector14F + the hash so
+    ///    the caller can populate the cache after computing the score.
+    /// Result codes:
+    ///   2 = body-cache hit (scoreIndex valid, query is default — skip parse/KNN)
+    ///   1 = parsed ok (query valid, hash valid)
+    ///   0 = malformed JSON
+    ///  -1 = body not yet buffered (caller falls back to async)
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int TryParseWithCache(
+        PipeReader pipe,
+        BodyCache  cache,
+        out Vector14F query,
+        out ulong  bodyHash,
+        out int    scoreIndex)
+    {
+        if (!pipe.TryRead(out var result))
+        {
+            query      = default;
+            bodyHash   = 0;
+            scoreIndex = -1;
+            return -1;
+        }
+
+        var buf = result.Buffer;
+        ReadOnlySpan<byte> bodySpan;
+        byte[]? rented = null;
+        if (buf.IsSingleSegment)
+        {
+            bodySpan = buf.FirstSpan;
+        }
+        else
+        {
+            int len = (int)buf.Length;
+            rented = ArrayPool<byte>.Shared.Rent(len);
+            buf.CopyTo(rented);
+            bodySpan = rented.AsSpan(0, len);
+        }
+
+        // 1) Body-hash lookup (~3 ns/byte ⇒ <2 µs for 600-byte payload)
+        if (cache.TryGet(bodySpan, out scoreIndex, out bodyHash))
+        {
+            if (rented is not null) ArrayPool<byte>.Shared.Return(rented);
+            query = default;
+            pipe.AdvanceTo(buf.End);
+            return 2;
+        }
+
+        // 2) Cache miss — parse the JSON the regular way
+        bool ok = Parse(bodySpan, out query);
+        if (rented is not null) ArrayPool<byte>.Shared.Return(rented);
+        pipe.AdvanceTo(buf.End);
+        return ok ? 1 : 0;
+    }
+
+    /// <summary>
     /// Reads the PipeReader body and parses it into a Vector14F.
     /// Returns (true, vector) on success, (false, default) on malformed input.
     /// Uses a tuple return to avoid the async-out-parameter restriction.

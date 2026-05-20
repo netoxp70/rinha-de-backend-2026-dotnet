@@ -23,7 +23,7 @@ var sw = Stopwatch.StartNew();
 // ─────────────────────────────────────────────────────────
 // Step 1: Parse references.json.gz
 // ─────────────────────────────────────────────────────────
-Console.WriteLine($"[1/4] Parsing {inputPath}...");
+Console.WriteLine($"[1/5] Parsing {inputPath}...");
 var vectors = new float[ExpectedCount * Constants.PaddedDimensions];
 var labels = new byte[ExpectedCount]; // 0=legit, 1=fraud
 int count = 0;
@@ -93,15 +93,14 @@ Console.WriteLine($"  Total: {count:N0} vectors in {sw.Elapsed.TotalSeconds:F1}s
 // ─────────────────────────────────────────────────────────
 // Step 2: k-means++ clustering
 // ─────────────────────────────────────────────────────────
-Console.WriteLine($"[2/4] Running k-means++ (nlist={NList}, iters={KMeansIterations})...");
+Console.WriteLine($"[2/5] Running k-means (nlist={NList}, iters={KMeansIterations})...");
 sw.Restart();
 
 var centroids = new float[NList * Constants.PaddedDimensions];
 var assignments = new int[count];
 var rng = new Random(Seed);
 
-// Random initialization — O(nlist) vs O(N×nlist²) for k-means++.
-// Sufficient quality when followed by k-means iterations.
+// Random initialization
 {
     var picked = new HashSet<int>(NList);
     for (int c = 0; c < NList; c++)
@@ -176,20 +175,25 @@ for (int iter = 0; iter < KMeansIterations; iter++)
 Console.WriteLine($"  k-means done in {sw.Elapsed.TotalSeconds:F1}s");
 
 // ─────────────────────────────────────────────────────────
-// Step 3: Build IVF cell structure (SoA ordered by cluster)
+// Step 3: Build IVF ordering (cell-contiguous layout)
 // ─────────────────────────────────────────────────────────
-Console.WriteLine("[3/4] Building IVF cell structure...");
+// Vectors are reordered so all vectors in cell c are contiguous.
+// ivf_offsets.bin: (NList+1) fence-post int32 offsets (offset[c]..offset[c+1] is cell c).
+// This eliminates the orderedIndices indirection at query time: scanning a cell
+// is a sequential read of (offset[c+1]-offset[c]) rows starting at offset[c].
+Console.WriteLine("[3/5] Building IVF cell ordering (contiguous layout)...");
 sw.Restart();
 
 var cellLengths = new int[NList];
 for (int i = 0; i < count; i++)
     cellLengths[assignments[i]]++;
 
-var cellOffsets = new int[NList];
-for (int c = 1; c < NList; c++)
-    cellOffsets[c] = cellOffsets[c - 1] + cellLengths[c - 1];
+// Fence-post offsets: offset[0]=0, offset[c]=sum of lengths[0..c-1], offset[NList]=count
+var cellOffsets = new int[NList + 1];
+for (int c = 0; c < NList; c++)
+    cellOffsets[c + 1] = cellOffsets[c] + cellLengths[c];
 
-// Ordered indices per cluster
+// Build cell-ordered permutation (maps new position → original index)
 var orderedIndices = new int[count];
 var cellFillPos = new int[NList];
 for (int i = 0; i < count; i++)
@@ -200,94 +204,73 @@ for (int i = 0; i < count; i++)
     cellFillPos[cluster]++;
 }
 
-Console.WriteLine($"  IVF structure built in {sw.Elapsed.TotalSeconds:F1}s");
+Console.WriteLine($"  IVF ordering done in {sw.Elapsed.TotalSeconds:F1}s");
 
 // ─────────────────────────────────────────────────────────
-// Step 4: Write binary files
+// Step 4: Quantize to Q8 (symmetric scale=127, same as reference)
 // ─────────────────────────────────────────────────────────
-Console.WriteLine("[4/5] Quantizing to Q8...");
+// Symmetric: each dimension is normalized to [-1,1] already by the vectorizer,
+// so multiply by 127 and round. range is intentionally clamped to [-128,127].
+// This matches the reference project's Q8Scale=127 and means QuantizeQuery
+// is just: q = clamp(round(v * 127), -128, 127) — no per-dim params needed.
+Console.WriteLine("[4/5] Quantizing to Q8 (symmetric scale=127, cell-ordered)...");
 sw.Restart();
 
-// Compute per-dimension min and range (over VectorDimensions, not padded)
-var dimMin   = new float[Constants.VectorDimensions];
-var dimScale = new float[Constants.VectorDimensions]; // 255 / (max-min), 0 if constant
+// Cell-ordered Q8: vectors stored in IVF cell order, PaddedDimensions per row.
+// Both the float and Q8 files share the same row ordering.
+var q8DataOrdered  = new sbyte[count * Constants.PaddedDimensions];
+var f32DataOrdered = new float[count * Constants.PaddedDimensions];
+var labelsOrdered  = new byte[count];
 
-Array.Fill(dimMin, float.MaxValue);
-var dimMax = new float[Constants.VectorDimensions];
-Array.Fill(dimMax, float.MinValue);
-
-for (int i = 0; i < count; i++)
+for (int newPos = 0; newPos < count; newPos++)
 {
-    int offset = i * Constants.PaddedDimensions;
+    int origIdx  = orderedIndices[newPos];
+    int srcOff   = origIdx  * Constants.PaddedDimensions;
+    int dstOff   = newPos   * Constants.PaddedDimensions;
+
+    labelsOrdered[newPos] = labels[origIdx];
+
     for (int d = 0; d < Constants.VectorDimensions; d++)
     {
-        float v = vectors[offset + d];
-        if (v < dimMin[d]) dimMin[d] = v;
-        if (v > dimMax[d]) dimMax[d] = v;
-    }
-}
+        float v = vectors[srcOff + d];
+        f32DataOrdered[dstOff + d] = v;
 
-for (int d = 0; d < Constants.VectorDimensions; d++)
-{
-    float range = dimMax[d] - dimMin[d];
-    dimScale[d] = range > 1e-7f ? 255f / range : 0f;
-}
-
-// Quantize vectors: sbyte[count × PaddedDimensions] (padding dims = 0)
-var q8Data = new sbyte[count * Constants.PaddedDimensions];
-for (int i = 0; i < count; i++)
-{
-    int offset = i * Constants.PaddedDimensions;
-    for (int d = 0; d < Constants.VectorDimensions; d++)
-    {
-        float v = vectors[offset + d];
-        int q = (int)MathF.Round((v - dimMin[d]) * dimScale[d]);
-        if (q < 0) q = 0;
-        if (q > 255) q = 255;
-        // Store as signed: shift [0,255] → [-128,127]
-        q8Data[offset + d] = (sbyte)(q - 128);
+        int q = (int)MathF.Round(v * Constants.Q8Scale);
+        if (q < -128) q = -128;
+        if (q >  127) q =  127;
+        q8DataOrdered[dstOff + d] = (sbyte)q;
     }
     // Padding dims remain 0
 }
 
 Console.WriteLine($"  Q8 quantization done in {sw.Elapsed.TotalSeconds:F1}s");
 
+// ─────────────────────────────────────────────────────────
+// Step 5: Write binary files
+// ─────────────────────────────────────────────────────────
 Console.WriteLine("[5/5] Writing binary files...");
 sw.Restart();
 
-// references_f32.bin: all vectors in original order (float32, padded to 16 dims)
+// references_f32.bin: vectors in IVF cell order (float32, padded to 16 dims)
 using (var f = File.Create(Path.Combine(outputDir, "references_f32.bin")))
 {
     var bytes = new byte[count * Constants.PaddedDimensions * sizeof(float)];
-    Buffer.BlockCopy(vectors, 0, bytes, 0, bytes.Length);
+    Buffer.BlockCopy(f32DataOrdered, 0, bytes, 0, bytes.Length);
     f.Write(bytes);
 }
-Console.WriteLine($"  references_f32.bin: {count * Constants.PaddedDimensions * 4 / 1048576} MB");
+Console.WriteLine($"  references_f32.bin: {count * Constants.PaddedDimensions * 4 / 1048576} MB (cell-ordered)");
 
-// references_q8.bin: quantized sbyte vectors (PaddedDimensions per vector)
-unsafe
+// references_q8.bin: cell-ordered Q8 sbyte vectors (PaddedDimensions per vector)
 {
     var q8Bytes = new byte[count * Constants.PaddedDimensions];
-    Buffer.BlockCopy(q8Data, 0, q8Bytes, 0, q8Bytes.Length);
+    Buffer.BlockCopy(q8DataOrdered, 0, q8Bytes, 0, q8Bytes.Length);
     File.WriteAllBytes(Path.Combine(outputDir, "references_q8.bin"), q8Bytes);
 }
-Console.WriteLine($"  references_q8.bin: {count * Constants.PaddedDimensions / 1048576} MB");
+Console.WriteLine($"  references_q8.bin: {count * Constants.PaddedDimensions / 1048576} MB (cell-ordered, symmetric)");
 
-// q8_params.bin: float32[VectorDimensions] min + float32[VectorDimensions] scale
-using (var f = File.Create(Path.Combine(outputDir, "q8_params.bin")))
-{
-    var minBytes   = new byte[Constants.VectorDimensions * sizeof(float)];
-    var scaleBytes = new byte[Constants.VectorDimensions * sizeof(float)];
-    Buffer.BlockCopy(dimMin,   0, minBytes,   0, minBytes.Length);
-    Buffer.BlockCopy(dimScale, 0, scaleBytes, 0, scaleBytes.Length);
-    f.Write(minBytes);
-    f.Write(scaleBytes);
-}
-Console.WriteLine($"  q8_params.bin: {Constants.VectorDimensions * 2 * 4} bytes");
-
-// labels.bin
-File.WriteAllBytes(Path.Combine(outputDir, "labels.bin"), labels.AsSpan(0, count).ToArray());
-Console.WriteLine($"  labels.bin: {count} bytes");
+// labels.bin: in IVF cell order
+File.WriteAllBytes(Path.Combine(outputDir, "labels.bin"), labelsOrdered);
+Console.WriteLine($"  labels.bin: {count} bytes (cell-ordered)");
 
 // ivf_centroids.bin (float32, NList × PaddedDims)
 using (var f = File.Create(Path.Combine(outputDir, "ivf_centroids.bin")))
@@ -296,38 +279,16 @@ using (var f = File.Create(Path.Combine(outputDir, "ivf_centroids.bin")))
     Buffer.BlockCopy(centroids, 0, bytes, 0, bytes.Length);
     f.Write(bytes);
 }
+Console.WriteLine($"  ivf_centroids.bin: {NList} centroids");
 
-// ivf_assignments.bin (int32 per vector)
-using (var f = File.Create(Path.Combine(outputDir, "ivf_assignments.bin")))
+// ivf_offsets.bin: fence-post int32[NList+1] — offset[c]..offset[c+1] is cell c's range
+using (var f = File.Create(Path.Combine(outputDir, "ivf_offsets.bin")))
 {
-    var bytes = new byte[count * sizeof(int)];
-    Buffer.BlockCopy(assignments, 0, bytes, 0, bytes.Length);
-    f.Write(bytes);
-}
-
-// ivf_cell_offsets.bin (int32 per cell)
-using (var f = File.Create(Path.Combine(outputDir, "ivf_cell_offsets.bin")))
-{
-    var bytes = new byte[NList * sizeof(int)];
+    var bytes = new byte[(NList + 1) * sizeof(int)];
     Buffer.BlockCopy(cellOffsets, 0, bytes, 0, bytes.Length);
     f.Write(bytes);
 }
-
-// ivf_cell_lengths.bin (int32 per cell)
-using (var f = File.Create(Path.Combine(outputDir, "ivf_cell_lengths.bin")))
-{
-    var bytes = new byte[NList * sizeof(int)];
-    Buffer.BlockCopy(cellLengths, 0, bytes, 0, bytes.Length);
-    f.Write(bytes);
-}
-
-// ivf_ordered_indices.bin (int32 per vector)
-using (var f = File.Create(Path.Combine(outputDir, "ivf_ordered_indices.bin")))
-{
-    var bytes = new byte[count * sizeof(int)];
-    Buffer.BlockCopy(orderedIndices, 0, bytes, 0, bytes.Length);
-    f.Write(bytes);
-}
+Console.WriteLine($"  ivf_offsets.bin: {NList + 1} int32 fence-posts");
 
 Console.WriteLine($"  All files written in {sw.Elapsed.TotalSeconds:F1}s");
 Console.WriteLine($"\nDone! {count:N0} vectors processed.");

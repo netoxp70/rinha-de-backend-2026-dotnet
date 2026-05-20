@@ -1,6 +1,6 @@
 # Rinha de Backend 2026 — Progress Tracker
 
-> Última atualização: 2026-05-19 05:00 UTC-3
+> Última atualização: 2026-05-19 22:00 UTC-3
 
 ---
 
@@ -12,7 +12,7 @@
 | 1.2 | Shared: Constants, VectorTypes, Vectorizer, MccRisk | ✅ DONE | Compila sem warnings; vetorização produz resultados corretos para exemplos do spec |
 | 1.3 | Preprocessor: parse JSON.gz | ✅ DONE | Lê 3M registros do `references.json.gz` |
 | 1.4 | Preprocessor: k-means++ clustering | ✅ DONE | Converge em 30 iters; max_cell=40.725 / avg≈11.719 → ratio 3.5× |
-| 1.5 | Preprocessor: grava binários IVF | ✅ DONE | Gera `references_f32.bin`, `labels.bin`, `ivf_centroids.bin`, `ivf_assignments.bin`, `ivf_cell_offsets.bin`, `ivf_cell_lengths.bin`, `ivf_ordered_indices.bin` |
+| 1.5 | Preprocessor: grava binários IVF | ✅ DONE | Gera `references_f32.bin`, `references_q8.bin`, `labels.bin`, `ivf_centroids.bin`, `ivf_offsets.bin` |
 | 1.6 | Preprocessor: determinismo | 🔲 TODO | Rodar 2× com seed=42 produz binários byte-idênticos |
 
 ---
@@ -93,7 +93,7 @@
 | # | Item | Prioridade | Critério de Aceite |
 |---|------|------------|--------------------|
 | O.1 | AVX2 SIMD kernel (L2 squared) | ✅ DONE | SimdDistance.cs AVX2+SSE+scalar, Prefetch0 no scan |
-| O.2 | Q8 scan + F32 rerank (2-phase) | ✅ DONE | Preprocessor gera `references_q8.bin` + `q8_params.bin`; IvfIndex.ScanCellsQ8; KnnEngine 2-phase (Q8 overfetch=20 → F32 rerank top-5) |
+| O.2 | Q8 scan + F32 rerank (2-phase) | ✅ DONE | Preprocessor gera `references_q8.bin`; IvfIndex.ScanCellsQ8; KnnEngine 2-phase (Q8 overfetch=20 → F32 rerank top-5) |
 | O.3 | Borderline re-probe | ✅ DONE | nprobe=1 fast + nprobe=32 se score=0.4 ou 0.6 |
 | O.4 | BBox repair para early-stop | MÉDIA | Bounding boxes por célula para pular células impossíveis |
 | O.5 | Utf8JsonReader direto (sem DTO) | ✅ DONE | `RequestParser.cs` — zero `TransactionRequest` alloc; MCC lookup via 4-byte uint switch |
@@ -129,9 +129,9 @@
 |--------|----------|-----|-----|-----|-----|
 | nprobe=8 | Windows JIT | — | — | 17-19ms | — |
 | nprobe=2+borderline=32 | Windows JIT | — | — | ~5ms | — |
-| **nprobe=2+borderline=32** | **Docker NativeAOT Linux (50VU)** | **12ms** | **22ms** | **91ms** | **81** |
+| **nprobe=1+borderline=0 (Q8)** | **Docker NativeAOT Linux (50VU)** | **48.7ms** | **97.0ms** | **102.0ms** | **946** |
 
-> p99=91ms no Docker Windows é penalizado pelo overhead de virtualização WSL2. Em Linux nativo esperado p99 < 10ms.
+> p99=102ms no Docker Windows é penalizado pelo overhead de virtualização WSL2. Em Linux nativo esperado p99 < 10ms.
 > nprobe=1 recall=92.68% (abaixo de 0.95). **nprobe=2+borderline=32 → recall=98.52% ✅**
 
 ### Recall@5 (RecallValidator, 1k queries vs brute-force)
