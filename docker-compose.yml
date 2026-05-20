@@ -30,6 +30,8 @@ services:
       - uds:/run/uds
     networks: [app]
     restart: on-failure
+    ulimits:
+      memlock: -1
     healthcheck:
       test: ["CMD-SHELL", "grep -q api1.sock /proc/net/unix || exit 1"]
       interval: 3s

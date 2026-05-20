@@ -29,6 +29,12 @@ Console.WriteLine($"Index loaded: {index.VectorCount:N0} vectors, {index.NList} 
 if (Environment.GetEnvironmentVariable("WARMUP") != "0")
 {
     var swWarm = System.Diagnostics.Stopwatch.StartNew();
+
+    var swPrefetch = System.Diagnostics.Stopwatch.StartNew();
+    long touched = index.Prefetch();
+    swPrefetch.Stop();
+    Console.WriteLine($"Prefetch: {touched / 1048576}MiB touched in {swPrefetch.ElapsedMilliseconds}ms");
+
     int warmupIters = int.TryParse(Environment.GetEnvironmentVariable("WARMUP_ITERS"), out var _wi) && _wi > 0 ? _wi : 200;
     var rng = new Random(20260505);
     float warmSink = 0f;
@@ -140,6 +146,7 @@ app.MapPost("/fraud-score", (RequestDelegate)((HttpContext ctx) =>
         resp.StatusCode    = 200;
         resp.ContentType   = "application/json";
         resp.ContentLength = body.Length;
+        resp.Headers.Date  = default;
         var writer = resp.BodyWriter;
         writer.Write(body.AsSpan());
         var flush = writer.FlushAsync(ctx.RequestAborted);

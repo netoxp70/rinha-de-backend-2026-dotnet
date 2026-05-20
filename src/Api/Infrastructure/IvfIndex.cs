@@ -78,6 +78,52 @@ public sealed class IvfIndex : IDisposable
         }
     }
 
+    /// <summary>
+    /// Pre-faults all mmap pages into the kernel page cache and advises huge pages.
+    /// Call once at startup before serving requests.
+    /// Returns total bytes touched.
+    /// </summary>
+    public unsafe long Prefetch()
+    {
+        long touched = 0;
+        const int pageSize = 4096;
+
+        // Touch every page of the float32 vectors mmap
+        long vecBytes = (long)_vectorCount * Constants.PaddedDimensions * sizeof(float);
+        byte* vp = (byte*)_vectorsPtr;
+        for (long off = 0; off < vecBytes; off += pageSize)
+        {
+            _ = *(vp + off);
+        }
+        touched += vecBytes;
+
+        // Touch Q8 pages
+        if (_hasQ8)
+        {
+            long q8Bytes = (long)_vectorCount * Constants.PaddedDimensions;
+            byte* q8p = (byte*)_q8Ptr;
+            for (long off = 0; off < q8Bytes; off += pageSize)
+            {
+                _ = *(q8p + off);
+            }
+            touched += q8Bytes;
+        }
+
+        // madvise MADV_HUGEPAGE on Linux — reduces TLB pressure during cell scans
+        if (OperatingSystem.IsLinux())
+        {
+            long vecBytes2 = (long)_vectorCount * Constants.PaddedDimensions * sizeof(float);
+            madvise((nint)_vectorsPtr, (nuint)vecBytes2, 14); // MADV_HUGEPAGE = 14
+            if (_hasQ8)
+                madvise((nint)_q8Ptr, (nuint)((long)_vectorCount * Constants.PaddedDimensions), 14);
+        }
+
+        return touched;
+    }
+
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = false)]
+    private static extern int madvise(nint addr, nuint length, int advice);
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public unsafe ReadOnlySpan<float> GetVector(int index)
         => new(_vectorsPtr + (long)index * Constants.PaddedDimensions, Constants.PaddedDimensions);
