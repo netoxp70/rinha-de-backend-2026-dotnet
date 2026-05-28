@@ -1,5 +1,10 @@
 {
   "name": "netoxp70",
   "language": ".NET 11",
-  "repo": "https://github.com/netoxp70/rinha-de-backend-2026-dotnet"
+  "repo": "https://github.com/netoxp70/rinha-de-backend-2026-dotnet",
+  "participants": ["Milton Neto"],
+  "social": ["https://github.com/netoxp70"],
+  "source-code-repo": "https://github.com/netoxp70/rinha-de-backend-2026-dotnet",
+  "stack": [".net", "nativeaot", "nginx", "avx2", "ivf"],
+  "open_to_work": false
 }
