@@ -2,6 +2,19 @@
 
 API HTTP de detecção de fraude via KNN (k=5) em 3M vetores de 14 dimensões, compilada com NativeAOT em .NET 11.
 
+## Tecnologias
+
+![.NET 11](https://img.shields.io/badge/.NET-11_preview-512BD4?style=flat&logo=dotnet&logoColor=white)
+![ASP.NET Core](https://img.shields.io/badge/ASP.NET_Core-11_Minimal_API-512BD4?style=flat&logo=dotnet&logoColor=white)
+![NativeAOT](https://img.shields.io/badge/NativeAOT-linux--x64-512BD4?style=flat&logo=dotnet&logoColor=white)
+![nginx](https://img.shields.io/badge/nginx-1.30.1--alpine-009639?style=flat&logo=nginx&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat&logo=docker&logoColor=white)
+![AVX2](https://img.shields.io/badge/SIMD-AVX2%2FSSE-ED8B00?style=flat&logo=intel&logoColor=white)
+![IVF](https://img.shields.io/badge/Index-IVF_%2B_Q8-00ADD8?style=flat)
+![KNN](https://img.shields.io/badge/KNN-k%3D5%2C_3M_vetores-00ADD8?style=flat)
+![mmap](https://img.shields.io/badge/MemoryMappedFile-page_cache_shared-6DB33F?style=flat)
+![UDS](https://img.shields.io/badge/Unix_Domain_Socket-tmpfs-6DB33F?style=flat)
+
 ## Arquitetura
 
 ```
