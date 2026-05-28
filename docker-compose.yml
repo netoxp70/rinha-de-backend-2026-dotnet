@@ -2,24 +2,19 @@ name: rinha-backend-2026
 
 services:
   api1: &api
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.api
+    image: ghcr.io/netoxp70/rinha-de-backend-2026-dotnet:3c24882292ca49de146670889d972454df882fcb
     cpuset: "0"
     security_opt:
       - seccomp=unconfined
     environment:
       UDS_PATH: "/run/uds/api1.sock"
-      # ── GC ───────────────────────────────────────────────────────────
       DOTNET_GCHeapCount: "1"
       DOTNET_PROCESSOR_COUNT: "1"
       DOTNET_GCConserveMemory: "5"
       DOTNET_GCNoAffinitize: "1"
-      # ── ThreadPool: 8 workers to absorb 50 VU burst ────────────────
       DOTNET_ThreadPool_UnfairSemaphoreSpinLimit: "0"
       TP_MIN_WORKERS: "8"
       TP_MAX_WORKERS: "8"
-      # ── KNN: nprobe=1 + early-stop (reference config) ───────────────
       IVF_NPROBE: "1"
       IVF_BORDERLINE: "0"
       IVF_BORDERLINE_NPROBE: "4"
