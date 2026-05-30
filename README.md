@@ -29,7 +29,7 @@ nginx (round-robin, UDS, sem lógica)   cpuset=2,3
 |---------|-----|-----|--------|-----------|
 | api1 | 0.45 | 150MB | 0 | .NET 11 NativeAOT, IVF+Q8, mmap |
 | api2 | 0.45 | 150MB | 1 | .NET 11 NativeAOT, IVF+Q8, mmap |
-| lb   | 0.10 | 50MB  | 2,3 | nginx, least_conn, UDS |
+| lb   | 0.10 | 50MB  | 2,3 | nginx, least_conn, UDS | 
 | **Total** | **1.00** | **350MB** | | |
 
 ## Stack
