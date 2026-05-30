@@ -2,7 +2,7 @@ name: rinha-backend-2026
 
 services:
   api1: &api
-    image: ghcr.io/netoxp70/rinha-de-backend-2026-dotnet:3c24882292ca49de146670889d972454df882fcb
+    image: ghcr.io/netoxp70/rinha-de-backend-2026-dotnet:d14b3ca5941ea79dc4184849cc6cc6b9804d117c
     cpuset: "0"
     security_opt:
       - seccomp=unconfined
