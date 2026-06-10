@@ -2,7 +2,7 @@ name: rinha-backend-2026
 
 services:
   api1:
-    image: ghcr.io/netoxp70/rinha-de-backend-2026-dotnet:d14b3ca5941ea79dc4184849cc6cc6b9804d117c
+    image: ghcr.io/netoxp70/rinha-de-backend-2026-dotnet:55e16605afc49fb5e1455630458bc319f513104b
     platform: linux/amd64
     cpuset: "0"
     security_opt:
@@ -41,7 +41,7 @@ services:
           memory: "150MB"
 
   api2:
-    image: ghcr.io/netoxp70/rinha-de-backend-2026-dotnet:d14b3ca5941ea79dc4184849cc6cc6b9804d117c
+    image: ghcr.io/netoxp70/rinha-de-backend-2026-dotnet:55e16605afc49fb5e1455630458bc319f513104b
     platform: linux/amd64
     cpuset: "1"
     security_opt:
